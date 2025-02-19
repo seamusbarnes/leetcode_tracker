@@ -172,3 +172,5 @@ cython_debug/
 
 # Directory of scraped html data
 /html
+/html01
+/html02
