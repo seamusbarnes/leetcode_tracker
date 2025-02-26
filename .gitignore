@@ -180,3 +180,6 @@ cython_debug/
 
 # Temperary python test scripts
 deleteme.py
+
+# Folder for scratch data and scripts
+scratch/
