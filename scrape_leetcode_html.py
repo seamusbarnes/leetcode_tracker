@@ -14,11 +14,9 @@ leetcode_url_prefix = "https://leetcode.com"
 def is_valid_date(date_str):
     return re.fullmatch(r"\d{4}\.\d{2}\.\d{2}", date_str) is not None
 
-def extract_problems_from_html(html, debug_file=""):
+def extract_problems_from_html(html):
     soup = BeautifulSoup(html, "html.parser")
     rows = soup.find_all("div", role="row")
-
-    print(f"  [DEBUG] {debug_file}: Found {len(rows)} rows (div[role='row'])")
 
     problems = []
     suspicious_rows = []
@@ -95,6 +93,16 @@ def extract_problems_from_html(html, debug_file=""):
         else:
             difficulty = None
 
+        # Attempted to find "last result"
+        last_result_container = row.find("div", class_="text-sd-muted-foreground flex h-full items-center")
+        if last_result_container:
+            last_result_tag = last_result_container.get_text(strip=True)
+        else:
+            last_result_tag = None
+        if last_result_tag != 'Accepted':
+            print(f'problem id {problem_id} has last result tag: {last_result_tag}')
+        
+
         # Check if we have enough data to consider this a valid problem
         if all([problem_id, problem_title, full_url, difficulty]):
             problems.append({
@@ -102,6 +110,7 @@ def extract_problems_from_html(html, debug_file=""):
                 "problem_id": problem_id,
                 "problem_title": problem_title,
                 "difficulty": difficulty,
+                "last_result": last_result_tag,
                 "url": full_url,
             })
         else:
@@ -113,25 +122,47 @@ def extract_problems_from_html(html, debug_file=""):
 
     return problems, suspicious_rows
 
-def process_leetcode_html_files(input_folder="html02", output_csv="leetcode_problems.csv"):
+def process_leetcode_html_files(
+    input_folder="html",
+    output_csv="leetcode_problems.csv",
+    pattern_mode=None  # <--- NEW parameter
+):
     """
-    1. Looks in 'input_folder' for all .html files.
+    1. Looks in 'input_folder' for all relevant files.
     2. Extracts problem info from each file.
     3. Deduplicates based on (problem_id, problem_title).
     4. Logs suspicious rows.
     5. Writes final results to a CSV.
+
+    :param pattern_mode: can be None, 'number', or 'progress' (or anything else you define)
     """
-    print(f"[DEBUG] Scanning folder: {input_folder}")
+
     if not os.path.isdir(input_folder):
         print(f"ERROR: {input_folder} is not a valid directory.")
         return
 
-    # Gather all .html files in the given folder
-    html_files = [
-        f for f in os.listdir(input_folder)
-        if f.endswith(".html") or f.endswith(".txt")
-    ]
-    print(f"[DEBUG] Found {len(html_files)} .html files:", html_files)
+    # Gather all filenames first
+    all_files = os.listdir(input_folder)
+
+    # Depending on pattern_mode, filter which files we consider
+    if pattern_mode == "number":
+        # e.g. only files starting with a digit
+        html_files = [
+            f for f in all_files
+            if f.endswith(".html") and re.match(r"^\d", f)
+        ]
+    elif pattern_mode == "progress":
+        # e.g. only files starting with 'Progress'
+        html_files = [
+            f for f in all_files
+            if f.endswith(".html") and f.startswith("Progress")
+        ]
+    else:
+        # Default: gather all .html or .txt files
+        html_files = [
+            f for f in all_files
+            if f.endswith(".html") or f.endswith(".txt")
+        ]
 
     all_problems = []
     suspicious_rows_overall = []
@@ -142,21 +173,20 @@ def process_leetcode_html_files(input_folder="html02", output_csv="leetcode_prob
         with open(file_path, "r", encoding="utf-8") as f:
             html_content = f.read()
 
-        # Pass in file_name as debug info
-        problems, suspicious_rows = extract_problems_from_html(html_content, debug_file=file_name)
+        problems, suspicious_rows = extract_problems_from_html(html_content)
         print(f"  [DEBUG] {file_name}: Extracted {len(problems)} problems")
         all_problems.extend(problems)
         suspicious_rows_overall.extend(suspicious_rows)
 
-    # Print suspicious rows if any
-    if suspicious_rows_overall:
-        print(f"\n[DEBUG] Found {len(suspicious_rows_overall)} suspicious row(s):")
-        for row_info in suspicious_rows_overall:
-            print("  -", row_info)
-    else:
-        print("\n[DEBUG] No suspicious rows encountered.")
+    # Print any suspicious rows
+    # if suspicious_rows_overall:
+    #     print(f"\n[DEBUG] Found {len(suspicious_rows_overall)} suspicious row(s):")
+    #     for row_info in suspicious_rows_overall:
+    #         print("  -", row_info)
+    # else:
+    #     print("\n[DEBUG] No suspicious rows encountered.")
 
-    # Deduplicate by (problem_id, problem_title)
+    # Deduplicate
     seen = {}
     duplicates = defaultdict(int)
 
@@ -176,14 +206,18 @@ def process_leetcode_html_files(input_folder="html02", output_csv="leetcode_prob
 
     unique_problems = list(seen.values())
 
-    # Write to CSV
-    csv_columns = ["date", "problem_id", "problem_title", "difficulty", "url"]
+    # Write CSV
+    csv_columns = ["date", "problem_id", "problem_title", "difficulty", "last_result", "url"]
     with open(output_csv, "w", newline="", encoding="utf-8") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=csv_columns)
         writer.writeheader()
         writer.writerows(unique_problems)
 
-    print(f"\n[DEBUG] Finished. CSV file '{output_csv}' has been created with {len(unique_problems)} unique problem(s).")
+    print(f"\n[DEBUG] Finished. CSV file '{output_csv}' has {len(unique_problems)} unique problem(s).")
 
 if __name__ == "__main__":
-    process_leetcode_html_files()
+    # Example usage:
+    # process_leetcode_html_files(pattern_mode=None)  # to get all .html/.txt
+    # process_leetcode_html_files(pattern_mode="number")    # files starting with a digit
+    process_leetcode_html_files(pattern_mode="progress")  # files starting with 'Progress'
+    # process_leetcode_html_files()
