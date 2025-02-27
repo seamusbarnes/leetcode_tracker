@@ -23,6 +23,13 @@ def extract_problems_from_html(html):
 
     for row in rows:
         # Attempt to find a date
+        original_tag = row.find("div", class_="text-sd-muted-foreground")
+        print(original_tag)
+        # original_extracted = original_tag.get_text(strip=True) if original_extracted else None
+        # if original_extracted:
+        #     print(original_extracted)
+
+
         date_tag = row.find("div", class_="text-sd-muted-foreground")
         extracted_date = date_tag.get_text(strip=True) if date_tag else None
 
@@ -31,27 +38,6 @@ def extract_problems_from_html(html):
         else:
             date = today_date  # fallback
 
-        # Attempt to find title and problem ID
-        # title_tag = row.find("a", class_="font-semibold")
-        # if title_tag:
-        #     full_title = title_tag.get_text(strip=True)
-        #     url_suffix = title_tag.get("href", None)
-
-        #     if ". " in full_title:
-        #         problem_id, problem_title = full_title.split(". ", 1)
-        #     else:
-        #         suspicious_rows.append(f"Title format unexpected: {full_title}")
-        #         problem_id, problem_title = "Unknown", full_title
-
-        #     if url_suffix:
-        #         full_url = leetcode_url_prefix + url_suffix
-        #     else:
-        #         full_url = None
-        # else:
-        #     suspicious_rows.append("No title link found in row")
-        #     problem_id, problem_title, full_url = None, None, None
-
-        # Attempt to find title and problem ID
         title_tag = row.find("a", class_="font-semibold")
         if title_tag:
             # Get raw text and normalise any weird spacing
@@ -216,9 +202,147 @@ def process_leetcode_html_files(
 
     print(f"\n[DEBUG] Finished. CSV file '{output_csv}' has {len(unique_problems)} unique problem(s).")
 
+import re
+from bs4 import BeautifulSoup
+
+DATE_PATTERN = re.compile(r'^\d{4}\.\d{2}\.\d{2}$')  # e.g. "2024.01.18"
+
+def parse_leetcode_progress(html):
+    soup = BeautifulSoup(html, "html.parser")
+    # Each top-level problem “row” has class like "odd:bg-sd-card even:bg-sd-accent"
+    # or "dark:odd:bg-sd-card dark:even:bg-sd-accent" etc. They also typically have
+    # a "flex flex-col" with role="row". We'll look for them by role="row" plus some
+    # top-level styling class so we skip sub-rows.
+    # A practical approach is:
+    top_level_rows = soup.select('div[role="row"].flex.flex-col')
+
+    all_problems = []
+
+    for top_row in top_level_rows:
+        # 1) Extract the top-row date (may be e.g. “Yesterday” or “2025.02.25”)
+        #    This is in a <div style="width: 150px;"> inside the top-row’s child.
+        #    The class is "text-sd-muted-foreground".
+        #    We’ll just read the text; if it matches YYYY.MM.DD, we store it, else store raw string.
+        date_div = top_row.select_one('div[role="cell"][style*="width: 150px;"] div.text-sd-muted-foreground')
+        if date_div:
+            raw_top_date = date_div.get_text(strip=True)
+            if DATE_PATTERN.match(raw_top_date):
+                top_level_date = raw_top_date
+            else:
+                top_level_date = raw_top_date  # e.g. "Yesterday", "2 days ago", etc.
+        else:
+            top_level_date = None
+
+        # 2) Extract the problem title link & difficulty
+        link_tag = top_row.select_one('a.font-semibold[href^="/problems/"]')
+        if not link_tag:
+            # If no link, this may be just a “submission sub-row” rather than a main row, skip
+            continue
+
+        problem_url = link_tag['href']  # e.g. "/problems/binary-tree-inorder-traversal/"
+        problem_title_full = link_tag.get_text(strip=True)
+        # Usually "94. Binary Tree Inorder Traversal", so split:
+        if '. ' in problem_title_full:
+            problem_id, problem_title = problem_title_full.split('. ', 1)
+        else:
+            # Unexpected format
+            problem_id = None
+            problem_title = problem_title_full
+
+        # Difficulty is in the sibling <div class="text-[14px] text-sd-???"> (e.g. text-sd-easy)
+        # A simpler way is to select the next <div> with text-sd-??? in class:
+        difficulty_div = top_row.select_one('div.text-sd-easy, div.text-sd-medium, div.text-sd-hard')
+        difficulty = difficulty_div.get_text(strip=True) if difficulty_div else None
+
+        # 3) Extract the sub-table for submissions (if any). It's typically a <div role="table"> inside
+        #    the last <div> of the top-level row. Then each submission is a <div role="row"> inside that.
+        submissions_table = top_row.select_one('div[role="table"]')
+        submissions = []
+        if submissions_table:
+            # Each submission is a row: <div role="row" class="flex cursor-pointer flex-col">
+            submission_rows = submissions_table.select('div[role="row"].flex.cursor-pointer.flex-col')
+            for srow in submission_rows:
+                # Each submission row has a set of <div role="cell"> for date, result, language, runtime, memory
+                # Let’s extract them:
+                cells = srow.select('div[role="cell"]')
+                # You can also pick them out by the style widths or the text-sd-muted-foreground class, etc.
+                if len(cells) < 5:
+                    continue  # skip if it doesn't look like a submission row
+
+                # The first cell is the date: e.g. "2025.02.25"
+                sub_date_div = cells[0].select_one('.text-sd-muted-foreground')
+                submission_date = sub_date_div.get_text(strip=True) if sub_date_div else None
+
+                # The second cell is the result: e.g. "Accepted" or "Runtime Error"
+                result_div = cells[1]
+                submission_result = result_div.get_text(strip=True) if result_div else None
+
+                # The third cell is the language: e.g. "Python3"
+                lang_div = cells[2].select_one('.text-sd-muted-foreground')
+                submission_lang = lang_div.get_text(strip=True) if lang_div else None
+
+                # The fourth is runtime, the fifth is memory. They have “text-sd-muted-foreground flex ...”
+                runtime_div = cells[3].select_one('.text-sd-muted-foreground')
+                submission_runtime = runtime_div.get_text(strip=True) if runtime_div else None
+
+                memory_div = cells[4].select_one('.text-sd-muted-foreground')
+                submission_memory = memory_div.get_text(strip=True) if memory_div else None
+
+                submissions.append({
+                    'submission_date': submission_date,
+                    'result': submission_result,
+                    'language': submission_lang,
+                    'runtime': submission_runtime,
+                    'memory': submission_memory
+                })
+
+        # 4) Collect the problem info + the submissions list
+        one_problem = {
+            'problem_id': problem_id,
+            'problem_title': problem_title,
+            'problem_url': problem_url,
+            'top_row_date': top_level_date,
+            'difficulty': difficulty,
+            'submissions': submissions
+        }
+        all_problems.append(one_problem)
+
+    return all_problems
+
+
+def demo_parsing(html):
+    problems = parse_leetcode_progress(html)
+    for p in problems:
+        print("Problem ID:", p["problem_id"])
+        print("Title:", p["problem_title"])
+        print("Top-level Date:", p["top_row_date"])
+        print("Difficulty:", p["difficulty"])
+        print("Submissions:")
+        for sub in p["submissions"]:
+            print("  -", sub)
+        print("----")
+
 if __name__ == "__main__":
     # Example usage:
     # process_leetcode_html_files(pattern_mode=None)  # to get all .html/.txt
     # process_leetcode_html_files(pattern_mode="number")    # files starting with a digit
-    process_leetcode_html_files(pattern_mode="progress")  # files starting with 'Progress'
+
+    # process_leetcode_html_files(pattern_mode="progress")  # files starting with 'Progress'
+
     # process_leetcode_html_files()
+    with open("scratch/Progress - LeetCode-12.html", "r", encoding="utf-8") as f:
+        raw_html = f.read()
+
+    parsed_problems = parse_leetcode_progress(raw_html)
+    
+    # 3) If you like, call the demo function to print out details
+    demo_parsing(raw_html)
+
+    # Or just inspect parsed_problems directly
+    # for problem in parsed_problems:
+    #     print(f"Problem: {problem['problem_id']} - {problem['problem_title']}")
+    #     print(f"  Top-level date: {problem['top_row_date']}")
+    #     print(f"  Submissions ({len(problem['submissions'])}):")
+    #     for sub in problem['submissions']:
+    #         print("    -", sub)
+    #     print("------")
