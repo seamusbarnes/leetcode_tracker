@@ -5,14 +5,24 @@ import re
 from collections import defaultdict
 from bs4 import BeautifulSoup
 
-DATE_FORMAT = "%Y.%m.%d"
-today_date = datetime.today().strftime(DATE_FORMAT)
+date_format = r"%Y.%m.%d"
+today_date = datetime.today().strftime(date_format)
 
 leetcode_url_prefix = "https://leetcode.com"
 
 # Regex to validate date "YYYY.MM.DD"
 def is_valid_date(date_str):
     return re.fullmatch(r"\d{4}\.\d{2}\.\d{2}", date_str) is not None
+
+def get_row_date(row):
+    date_tag = row.find("div", class_="text-sd-muted-foreground")
+    if (date_tag and
+        date_tag.get_text(strip=True) and
+        is_valid_date(date_tag.get_text(strip=True))):
+        date = date_tag.get_text(strip=True)
+    else:
+        date = today_date
+    return date
 
 def extract_problems_from_html(html):
     soup = BeautifulSoup(html, "html.parser")
@@ -23,34 +33,8 @@ def extract_problems_from_html(html):
 
     for row in rows:
         # Attempt to find a date
-        date_tag = row.find("div", class_="text-sd-muted-foreground")
-        extracted_date = date_tag.get_text(strip=True) if date_tag else None
-
-        if extracted_date and is_valid_date(extracted_date):
-            date = extracted_date
-        else:
-            date = today_date  # fallback
-
-        # Attempt to find title and problem ID
-        # title_tag = row.find("a", class_="font-semibold")
-        # if title_tag:
-        #     full_title = title_tag.get_text(strip=True)
-        #     url_suffix = title_tag.get("href", None)
-
-        #     if ". " in full_title:
-        #         problem_id, problem_title = full_title.split(". ", 1)
-        #     else:
-        #         suspicious_rows.append(f"Title format unexpected: {full_title}")
-        #         problem_id, problem_title = "Unknown", full_title
-
-        #     if url_suffix:
-        #         full_url = leetcode_url_prefix + url_suffix
-        #     else:
-        #         full_url = None
-        # else:
-        #     suspicious_rows.append("No title link found in row")
-        #     problem_id, problem_title, full_url = None, None, None
-
+        date = get_row_date(row)
+        
         # Attempt to find title and problem ID
         title_tag = row.find("a", class_="font-semibold")
         if title_tag:
@@ -179,13 +163,6 @@ def process_leetcode_html_files(
         all_problems.extend(problems)
         suspicious_rows_overall.extend(suspicious_rows)
 
-    # Print any suspicious rows
-    # if suspicious_rows_overall:
-    #     print(f"\n[DEBUG] Found {len(suspicious_rows_overall)} suspicious row(s):")
-    #     for row_info in suspicious_rows_overall:
-    #         print("  -", row_info)
-    # else:
-    #     print("\n[DEBUG] No suspicious rows encountered.")
 
     # Deduplicate
     seen = {}
